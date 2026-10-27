@@ -137,6 +137,8 @@ def render_teams(svc: Service, me: Student, closed: bool) -> None:
             if can_apply and st.button(f"팀{team_id}에 지원", key=f"apply_{team_id}"):
                 finish(working("지원하는 중…", svc.apply, me.id, team_id))
     if not me.is_admin:
+        if closed and my_team is None:
+            st.warning("모집이 마감되어 직접 지원할 수 없어요. 관리자가 배정하면 팀이 정해져요.")
         if my_team is None:
             st.write("아직 팀이 없음")
         if waiting is not None:
