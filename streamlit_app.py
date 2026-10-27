@@ -5,6 +5,7 @@
 """
 
 import functools
+import html
 import logging
 import os
 from datetime import datetime, timedelta, timezone
@@ -20,6 +21,7 @@ load_dotenv(HERE / "key.env")
 from ai_client import DEFAULT_MODELS, AiHttpError, call_model  # noqa: E402
 from db import apply_schema, make_pool  # noqa: E402
 from models import Student  # noqa: E402
+from rules import covered_required  # noqa: E402
 from service import Result, Service, blocked  # noqa: E402
 
 logger = logging.getLogger(__name__)
@@ -76,6 +78,54 @@ def get_service() -> Service:
     return service
 
 
+# ---- 모양(회색·버건디·검정) ----
+
+STYLE = """
+<style>
+.stApp { background: #F3F2F2; }
+h1 { color: #1B1B1D; letter-spacing: -0.5px; }
+h1::after { content: ""; display: block; width: 48px; height: 4px; margin-top: 8px; background: #7A1F2B; border-radius: 2px; }
+[class*="st-key-team_"] { background: #FFFFFF; border: 1px solid #D4D1D1 !important; border-left: 5px solid #8E8A8A !important;
+  border-radius: 10px; padding: 12px 16px; margin-bottom: 8px; }
+[class*="st-key-team_"]:has(.mine-marker) { border-left: 5px solid #7A1F2B !important; background: #FBF4F5; }
+.badge { display: inline-block; padding: 1px 9px; margin: 0 4px 2px 0; border-radius: 999px; font-size: 0.82rem; }
+.badge-main { background: #7A1F2B; color: #FFFFFF; }
+.badge-sub { background: #D9D6D6; color: #1B1B1D; }
+.badge-ok { background: #1B1B1D; color: #FFFFFF; }
+.badge-warn { background: #FFFFFF; color: #7A1F2B; border: 1px solid #7A1F2B; }
+.member-row { margin: 4px 0; }
+.member-name { font-weight: 600; margin-right: 8px; }
+.steps { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 12px; }
+.step { padding: 4px 12px; border-radius: 8px; background: #E4E2E2; color: #6B6767; font-size: 0.9rem; }
+.step-done { background: #1B1B1D; color: #FFFFFF; }
+.step-now { background: #7A1F2B; color: #FFFFFF; font-weight: 600; }
+.mine-marker { display: none; }
+.stButton button:hover { border-color: #7A1F2B; color: #7A1F2B; }
+</style>
+"""
+
+
+def badge(text: str, kind: str) -> str:
+    return f'<span class="badge badge-{kind}">{html.escape(text)}</span>'
+
+
+def member_row(s: Student) -> str:
+    subs = "".join(badge(r, "sub") for r in s.sub_roles) or '<span style="color:#6B6767">없음</span>'
+    return (
+        f'<div class="member-row"><span class="member-name">{html.escape(s.name)}</span>'
+        f'주 역할 {badge(s.main_role, "main")} 보조 역할 {subs}</div>'
+    )
+
+
+def steps_html(current: int) -> str:
+    names = ["① 명단 올리기", "② 모집 마감", "③ AI 배정", "④ 배정 확정"]
+    parts = []
+    for i, name in enumerate(names, 1):
+        css = "step-done" if i < current else "step-now" if i == current else ""
+        parts.append(f'<span class="step {css}">{name}</span>')
+    return '<div class="steps">' + "".join(parts) + "</div>"
+
+
 # ---- 결과 안내 ----
 
 def working(text: str, fn, *args):
@@ -94,7 +144,13 @@ def show_result() -> None:
     with st.container(key="result"):
         text = st.session_state.get("last_result")
         if text:
-            st.markdown(text)
+            kind = text.split(":", 1)[0]
+            if kind == "승인":
+                st.success(text)
+            elif kind == "대기":
+                st.info(text)
+            else:  # 거절, 막힘
+                st.error(text)
 
 
 # ---- 로그인 ----
@@ -102,6 +158,7 @@ def show_result() -> None:
 def render_login(svc: Service) -> None:
     st.title("팀 편성")
     show_result()
+    st.caption("학번과 비밀번호를 입력해 로그인하세요. 학생 비밀번호는 모두 1234예요.")
     st.text_input("학번", key="login_student_no")
     st.text_input("비밀번호", type="password", key="login_password")
     if st.button("로그인", key="login_submit"):
@@ -116,23 +173,31 @@ def render_login(svc: Service) -> None:
 
 # ---- 공통 표시 ----
 
-def _describe(s: Student) -> str:
-    subs = ", ".join(s.sub_roles) if s.sub_roles else "없음"
-    return f"{s.name} · 주 역할 {s.main_role} · 보조 역할 {subs}"
-
-
 def render_teams(svc: Service, me: Student, closed: bool) -> None:
     teams = svc.teams()
     my_team = next((t for t, members in teams.items() if any(m.id == me.id for m in members)), None)
     waiting = svc.application_of(me.id) if not me.is_admin else None
+    if not me.is_admin:
+        render_my_status(me, my_team, waiting, closed)
+    st.subheader("팀 목록")
     for team_id, members in teams.items():
         # 팀 컨테이너에는 팀원의 이름만 넣는다(지원자의 이름을 넣으면 팀원으로 오해할 수 있다)
         with st.container(key=f"team_{team_id}", border=True):
+            if team_id == my_team:
+                st.markdown('<span class="mine-marker"></span>', unsafe_allow_html=True)
             st.markdown(f"**팀{team_id}**" + (" (내 팀)" if team_id == my_team else ""))
             for member in members:
-                st.write(_describe(member))
+                st.markdown(member_row(member), unsafe_allow_html=True)
             if not members:
                 st.caption("아직 팀원이 없음")
+            else:
+                full = len(members) >= 4
+                need = covered_required(members) < 2
+                chips = badge(f"{len(members)}/4명", "ok" if full else "sub")
+                chips += badge("필수 역할 보강 필요", "warn") if need else badge("필수 역할 충족", "ok")
+                if full:
+                    chips += badge("꽉 참", "warn")
+                st.markdown(chips, unsafe_allow_html=True)
             can_apply = not me.is_admin and my_team is None and waiting is None and not closed
             if can_apply and st.button(f"팀{team_id}에 지원", key=f"apply_{team_id}"):
                 finish(working("지원하는 중…", svc.apply, me.id, team_id))
@@ -147,6 +212,20 @@ def render_teams(svc: Service, me: Student, closed: bool) -> None:
             render_votes(svc, me, my_team)
 
 
+def render_my_status(me: Student, my_team: int | None, waiting, closed: bool) -> None:
+    """학생이 지금 무엇을 하면 되는지 한 줄로 알려준다."""
+    subs = ", ".join(me.sub_roles) if me.sub_roles else "없음"
+    st.caption(f"내 역할: 주 역할 {me.main_role} · 보조 역할 {subs}")
+    if my_team is not None:
+        st.info(f"팀{my_team}에 들어갔어요. 우리 팀에 지원이 오면 찬성이나 거부를 눌러 주세요.")
+    elif waiting is not None:
+        st.info(f"팀{waiting.team_id}에 지원했어요. 그 팀 팀원의 투표를 기다리고 있어요.")
+    elif closed:
+        st.info("모집이 끝났어요. 관리자의 배정을 기다려 주세요.")
+    else:
+        st.info("원하는 팀의 '지원' 단추를 눌러 팀에 들어가세요.")
+
+
 def render_votes(svc: Service, me: Student, team_id: int) -> None:
     pending = svc.pending_for_team(team_id)
     if not pending:
@@ -155,7 +234,7 @@ def render_votes(svc: Service, me: Student, team_id: int) -> None:
     with st.container(key="pending_votes"):
         st.subheader("우리 팀에 온 지원")
         for application in pending:
-            st.write(f"{application.student_name}의 지원")
+            st.markdown(f"<b>{html.escape(application.student_name)}</b>의 지원", unsafe_allow_html=True)
             if application.id in votes:
                 st.write(f"내 투표: {votes[application.id]}")
                 continue
@@ -169,6 +248,20 @@ def render_votes(svc: Service, me: Student, team_id: int) -> None:
 # ---- 관리자 ----
 
 def render_admin(svc: Service, me: Student, closed: bool) -> None:
+    teams = svc.teams()
+    left_now = svc.unassigned()
+    placed = sum(len(m) for m in teams.values())
+    if not teams:
+        current = 1
+    elif not closed:
+        current = 2
+    elif left_now:
+        current = 4 if st.session_state.get("proposal") else 3
+    else:
+        current = 5
+    with st.container(key="admin_steps"):
+        st.markdown(steps_html(current), unsafe_allow_html=True)
+        st.caption(f"팀 {len(teams)}개 · 팀이 있는 학생 {placed}명 · 팀이 없는 학생 {len(left_now)}명")
     st.file_uploader("명단 CSV", type=["csv"], key="admin_roster_file")
     st.number_input("팀 수", min_value=1, max_value=50, value=3, step=1, key="admin_team_count")
     start_col, close_col = st.columns(2)
@@ -181,6 +274,7 @@ def render_admin(svc: Service, me: Student, closed: bool) -> None:
             for name in ("proposal", "assign_status_text"):
                 st.session_state.pop(name, None)
         finish(result)
+    start_col.caption("누르면 기존 팀, 지원, 투표가 모두 지워져요.")
     if close_col.button("모집 마감", key="admin_close"):
         finish(working("모집을 마감하는 중…", svc.close, me.id))
 
@@ -189,7 +283,7 @@ def render_admin(svc: Service, me: Student, closed: bool) -> None:
         st.markdown("**팀이 없는 학생**")
         left = svc.unassigned()
         for student in left:
-            st.write(_describe(student))
+            st.markdown(member_row(student), unsafe_allow_html=True)
         if not left:
             st.caption("없음")
 
@@ -235,7 +329,7 @@ def render_proposal(left: list[Student]) -> None:
         for student_no, value in sorted(proposal.items()):
             team = value[0] if isinstance(value, (list, tuple)) else value
             if student_no in by_no:
-                st.write(f"{_describe(by_no[student_no])} → 팀{team}")
+                st.markdown(f"{member_row(by_no[student_no])}→ **팀{team}**", unsafe_allow_html=True)
 
 
 # ---- 화면 조립 ----
@@ -261,6 +355,7 @@ def live_view(svc: Service, my_id: int) -> None:
 
 def main() -> None:
     st.set_page_config(page_title="팀 편성")
+    st.markdown(STYLE, unsafe_allow_html=True)
     try:
         svc = get_service()
     except ConfigError as exc:
