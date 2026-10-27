@@ -78,6 +78,12 @@ def get_service() -> Service:
 
 # ---- 결과 안내 ----
 
+def working(text: str, fn, *args):
+    """오래 걸릴 수 있는 처리를 하는 동안 "처리 중" 표시를 보여준다."""
+    with st.spinner(text):
+        return fn(*args)
+
+
 def finish(result: Result) -> None:
     """단추를 누른 결과를 저장하고 화면을 다시 그린다."""
     st.session_state["last_result"] = result.text
@@ -129,7 +135,7 @@ def render_teams(svc: Service, me: Student, closed: bool) -> None:
                 st.caption("아직 팀원이 없음")
             can_apply = not me.is_admin and my_team is None and waiting is None and not closed
             if can_apply and st.button(f"팀{team_id}에 지원", key=f"apply_{team_id}"):
-                finish(svc.apply(me.id, team_id))
+                finish(working("지원하는 중…", svc.apply, me.id, team_id))
     if not me.is_admin:
         if my_team is None:
             st.write("아직 팀이 없음")
@@ -153,9 +159,9 @@ def render_votes(svc: Service, me: Student, team_id: int) -> None:
                 continue
             yes_col, no_col = st.columns(2)
             if yes_col.button("찬성", key=f"vote_yes_{application.student_no}"):
-                finish(svc.vote(me.id, application.id, True))
+                finish(working("투표하는 중…", svc.vote, me.id, application.id, True))
             if no_col.button("거부", key=f"vote_no_{application.student_no}"):
-                finish(svc.vote(me.id, application.id, False))
+                finish(working("투표하는 중…", svc.vote, me.id, application.id, False))
 
 
 # ---- 관리자 ----
@@ -168,13 +174,13 @@ def render_admin(svc: Service, me: Student, closed: bool) -> None:
         uploaded = st.session_state.get("admin_roster_file")
         if uploaded is None:
             finish(blocked("명단 CSV를 먼저 올려 주세요"))
-        result = svc.upload_roster(me.id, uploaded.getvalue(), int(st.session_state["admin_team_count"]))
+        result = working("명단으로 처음 상태를 만드는 중…", svc.upload_roster, me.id, uploaded.getvalue(), int(st.session_state["admin_team_count"]))
         if result.kind == "승인":
             for name in ("proposal", "assign_status_text"):
                 st.session_state.pop(name, None)
         finish(result)
     if close_col.button("모집 마감", key="admin_close"):
-        finish(svc.close(me.id))
+        finish(working("모집을 마감하는 중…", svc.close, me.id))
 
     st.write("모집 상태: " + ("마감됨" if closed else "모집 중"))
     with st.container(key="unassigned"):
@@ -197,7 +203,8 @@ def render_admin(svc: Service, me: Student, closed: bool) -> None:
             last.append(text)
             slot.markdown(text)  # 몇 차 모델의 응답을 기다리는 중인지 바로 보여준다
 
-        result, assignment = svc.propose_assignment(me.id, on_status)
+        slot.markdown("AI 배정을 시작하는 중… (모델당 최대 2분이 걸릴 수 있어요)")
+        result, assignment = working("AI 배정 중… 창을 닫지 말고 기다려 주세요", svc.propose_assignment, me.id, on_status)
         st.session_state["proposal"] = assignment
         st.session_state["assign_status_text"] = (
             result.text if result.kind == "승인" else (last[-1] if last else result.text)
@@ -209,7 +216,7 @@ def render_admin(svc: Service, me: Student, closed: bool) -> None:
         proposal = st.session_state.get("proposal")
         if proposal is None:
             finish(blocked("확정할 배정안이 없음. 먼저 AI 배정을 실행해 주세요"))
-        result = svc.confirm(me.id, proposal)
+        result = working("배정안을 확정하는 중…", svc.confirm, me.id, proposal)
         if result.kind == "승인":
             for name in ("proposal", "assign_status_text"):
                 st.session_state.pop(name, None)
