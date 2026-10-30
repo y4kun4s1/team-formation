@@ -213,3 +213,32 @@ def test_status_messages_name_the_model_tier_in_order():
         (False, True, False),
         (False, False, True),
     ]
+
+
+# ---- 직접 배정 탐색이 한도를 넘어 포기한 경우 ----
+
+def _solver_gives_up(monkeypatch):
+    from assignment import SearchGaveUp
+
+    def give_up(teams, unassigned, **kwargs):
+        raise SearchGaveUp
+
+    monkeypatch.setattr("ai_client.solve_assignment", give_up)
+
+
+def test_chain_still_uses_a_valid_ai_answer_when_the_solver_gives_up(monkeypatch):
+    _solver_gives_up(monkeypatch)
+    result, calls, _, _ = _chain({"m1": GOOD, "m2": GOOD, "m3": GOOD})
+    assert result.source == "ai" and result.assignment == {"7": 1, "8": 2}
+    assert calls == ["m1"]
+
+
+def test_chain_does_not_claim_infeasible_when_solver_gave_up_and_ai_failed(monkeypatch):
+    _solver_gives_up(monkeypatch)
+    failing = {"m1": AiEmpty("빈 응답"), "m2": AiTimeout("시간 초과"), "m3": "엉뚱한 말"}
+    result, calls, statuses, _ = _chain(failing)
+    assert calls == ["m1", "m2", "m3"]  # 배정이 없다고 단정하지 않으므로 AI는 끝까지 불러 본다
+    assert result.source == "none" and result.assignment is None
+    assert result.gave_up is True
+    assert "찾지 못" in result.note and "배정이 없" not in result.note
+    assert "오래 걸" in statuses[0]

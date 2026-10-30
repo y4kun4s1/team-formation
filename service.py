@@ -440,6 +440,8 @@ class Service:
         if chain.source == "none":
             if chain.assignment == {}:
                 return ok("배정할 학생이 없음"), {}
+            if chain.gave_up:  # 없다고 단정할 수 없으므로 "배정이 없음"이라고 말하지 않는다
+                return blocked(f"배정을 찾지 못함: {chain.note}"), None
             return blocked(f"규칙을 지키는 배정이 없음: {chain.note}"), None
         if chain.source == "ai":
             return ok("AI 배정안이 규칙 검사를 통과함"), chain.assignment

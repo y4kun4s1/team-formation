@@ -110,3 +110,62 @@ def test_generic_infeasible_reason_does_not_repeat_prefix():
     assert solve_assignment(teams, left) is None
     reason = explain_infeasible(teams, left)
     assert reason and not reason.startswith("규칙을 지키는 배정이 없음")
+
+
+# ---- 탐색이 폭발하지 않는지(불가능한 입력을 빨리 알아채는지) ----
+
+def _within(seconds, fn):
+    """fn을 별도 스레드에서 돌려 seconds 안에 끝나는지 본다(윈도우에서도 되는 방식). 끝나면 결과를 돌려준다."""
+    import threading
+
+    box = {}
+    worker = threading.Thread(target=lambda: box.setdefault("value", fn()), daemon=True)
+    worker.start()
+    worker.join(seconds)
+    assert not worker.is_alive(), f"{seconds}초 안에 끝나지 않음(탐색이 폭발함)"
+    return box["value"]
+
+
+def test_no_web_programmer_anywhere_is_rejected_quickly():
+    teams = {t: [] for t in (1, 2, 3, 4)}
+    mains = ["PL", "FD", "TT", "RW", "PT"]
+    left = [student(i, mains[i % 5]) for i in range(1, 17)]  # 16명 중 웹 프로그래머를 맡을 사람이 없다
+    assert _within(2, lambda: solve_assignment(teams, left)) is None
+    assert "웹 프로그래머" in _within(2, lambda: explain_infeasible(teams, left))
+
+
+def test_existing_team_that_lacks_a_role_needs_a_candidate_quickly():
+    teams = {1: [student(1, "PL"), student(2, "TT")], 2: [student(3, "PL"), student(4, "RW")]}
+    mains = ["FD", "PT", "TT", "RW"]
+    left = [student(10 + i, mains[i % 4]) for i in range(12)]  # 웹 프로그래머를 맡을 사람이 없다
+    assert _within(2, lambda: solve_assignment(teams, left)) is None
+
+
+def test_more_students_with_the_same_main_role_than_teams_is_rejected_quickly():
+    teams = {t: [] for t in (1, 2, 3)}
+    left = [student(i, "TT", "PL;WP") for i in range(1, 6)]  # 테스터 5명, 팀은 3개
+    left += [student(10 + i, "FD", "PL;WP") for i in range(6)]
+    assert _within(2, lambda: solve_assignment(teams, left)) is None
+    reason = _within(2, lambda: explain_infeasible(teams, left))
+    assert "테스터" in reason and "팀 수" in reason
+
+
+def test_explain_for_infeasible_input_does_not_search_twice():
+    teams = {t: [] for t in (1, 2, 3, 4)}
+    mains = ["PL", "FD", "TT", "RW", "PT"]
+    left = [student(i, mains[i % 5]) for i in range(1, 21)]
+    assert _within(2, lambda: explain_infeasible(teams, left)) != ""
+
+
+def test_larger_feasible_roster_is_found_quickly():
+    import random
+
+    from models import ROLES
+    from models import Student
+
+    rng = random.Random(1)
+    left = [Student(i, f"S{i:03d}", f"n{i}", rng.choice(ROLES), tuple(rng.sample(ROLES, 1)), False) for i in range(36)]
+    teams = {t: [] for t in range(1, 10)}
+    result = _within(2, lambda: solve_assignment(teams, left))
+    assert result is not None
+    assert validate_assignment(result, teams, left) is None

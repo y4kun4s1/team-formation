@@ -270,3 +270,18 @@ def test_recent_ai_logs_lists_attempts_newest_first(svc):
     assert [log.model for log in logs] == ["m3", "m2", "m1"]
     assert all(log.status and log.elapsed_ms >= 0 for log in logs)
     assert len(svc.recent_ai_logs(2)) == 2
+
+
+def test_solver_giving_up_is_reported_without_claiming_there_is_no_assignment(svc, monkeypatch):
+    from assignment import SearchGaveUp
+
+    def give_up(teams, unassigned, **kwargs):
+        raise SearchGaveUp
+
+    monkeypatch.setattr("ai_client.solve_assignment", give_up)
+    runner = Runner(svc, EASY)
+    runner.setup()
+    runner.run(EASY["steps"])
+    result, assignment = svc.propose_assignment(runner.admin_id, lambda s: None)  # 가짜 AI도 모두 실패한다
+    assert result.kind == "막힘" and assignment is None
+    assert "배정을 찾지 못함" in result.text and "배정이 없음" not in result.text

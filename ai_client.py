@@ -9,7 +9,7 @@ from typing import Callable, Mapping, Sequence
 
 import requests
 
-from assignment import Assignment, explain_infeasible, solve_assignment, validate_assignment
+from assignment import SearchGaveUp, Assignment, explain_infeasible, solve_assignment, validate_assignment
 from models import Student
 
 API_URL = "https://openrouter.ai/api/v1/chat/completions"
@@ -182,7 +182,8 @@ class ChainResult:
     assignment: Assignment | None
     source: str  # "ai", "solver", "none"
     attempts: list[Attempt] = field(default_factory=list)
-    note: str = ""  # 규칙을 지키는 배정이 없을 때의 이유
+    note: str = ""  # 규칙을 지키는 배정이 없을 때의 이유(탐색을 포기했을 때는 그 사실)
+    gave_up: bool = False  # 직접 배정 탐색이 한도를 넘어 "있는지 없는지" 모르는 채로 끝났는가
 
 
 def _label(exc: AiError) -> str:
@@ -208,9 +209,17 @@ def run_chain(
     if not unassigned:
         return ChainResult({}, "none")
 
-    fallback = solve_assignment(teams, unassigned)
-    if fallback is None:
-        reason = explain_infeasible(teams, unassigned)
+    gave_up = False
+    try:
+        fallback = solve_assignment(teams, unassigned)
+    except SearchGaveUp:  # 배정이 있는지 없는지 모른다. 없다고 단정하지 말고 AI의 답을 검사해서 쓴다.
+        fallback, gave_up = None, True
+        on_status("직접 배정 탐색이 오래 걸려 AI의 답만 규칙으로 검사해서 씀")
+    if fallback is None and not gave_up:
+        try:
+            reason = explain_infeasible(teams, unassigned)
+        except SearchGaveUp:
+            reason = "남은 학생을 어떻게 나눠 넣어도 규칙 중 하나를 어기게 됨"
         on_status(f"규칙을 지키는 배정이 없음: {reason}")
         return ChainResult(None, "none", note=reason)
 
@@ -234,5 +243,9 @@ def run_chain(
         on_attempt(attempt)
         return ChainResult(raw, "ai", attempts)
 
+    if gave_up:
+        note = "직접 배정을 끝까지 찾지 못했고 AI의 답도 규칙을 통과하지 못함"
+        on_status(note)
+        return ChainResult(None, "none", attempts, note=note, gave_up=True)
     on_status("AI가 모든 모델에서 실패해 앱이 직접 배정함")
     return ChainResult(fallback, "solver", attempts)
