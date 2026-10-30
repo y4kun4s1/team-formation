@@ -194,3 +194,32 @@ def test_typed_team_count_survives_refresh(page, svc):
     page.press(box, "Enter")
     time.sleep(8)  # 자동 갱신이 두 번 이상 지나간다
     assert page.input_value(box) == "7"
+
+
+def test_rejected_application_reason_is_shown(page, svc):
+    load(svc, MID)
+    a, b = svc.login(no(MID, 1), "1234"), svc.login(no(MID, 5), "1234")
+    assert svc.apply(a.id, 1).kind == "승인"
+    assert svc.apply(b.id, 1).kind == "대기"
+    login(page, no(MID, 5), "1234")
+    app = svc.last_application(b.id)
+    assert svc.vote(a.id, app.id, False).kind == "거절"
+    page.wait_for_function(
+        "document.querySelector('.st-key-my_application')?.innerText.includes('팀원이 거부함')", timeout=12000)
+    assert "거절" in page.inner_text(key("my_application"))
+    assert page.query_selector(key("apply_1"))  # 다시 지원할 수 있다
+
+
+def test_admin_sees_ai_log_table(page, svc, tmp_path):
+    admin = load(svc, EASY)
+    login(page, "admin", ADMIN_PASSWORD)
+    page.wait_for_selector(key("admin_close"), timeout=TIMEOUT)
+    page.click(f"{key('admin_close')} button")
+    page.wait_for_function("document.body.innerText.includes('마감됨')", timeout=TIMEOUT)
+    page.click(f"{key('admin_assign')} button")
+    page.wait_for_selector(key("proposal"), timeout=60000)
+    page.wait_for_function("document.querySelector('.st-key-ai_logs')?.innerText.includes('poolside')", timeout=15000)
+    text = page.inner_text(key("ai_logs"))
+    assert text.count(":free") >= 3
+    assert "tf_test_pw" not in text and ADMIN_PASSWORD not in text
+    assert admin is not None

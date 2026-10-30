@@ -56,6 +56,15 @@ class Application:
     created_at: datetime
 
 
+@dataclass(frozen=True)
+class AiLog:
+    model: str
+    status: str
+    elapsed_ms: int
+    error_summary: str | None
+    created_at: datetime
+
+
 class _Stop(Exception):
     """트랜잭션을 되돌리고 이 결과를 돌려주려고 쓰는 내부 예외."""
 
@@ -404,6 +413,16 @@ class Service:
                 )
         except psycopg.Error:
             logger.warning("could not log AI attempt")
+
+    def recent_ai_logs(self, limit: int = 10) -> list[AiLog]:
+        """최근 AI 호출 기록(새것이 먼저). 키와 응답 본문은 저장하지 않으므로 그대로 보여 줘도 된다."""
+        with self.pool.connection() as conn:
+            rows = conn.execute(
+                "select model, status, coalesce(elapsed_ms, 0), error_summary, created_at "
+                "from tf_ai_logs order by id desc limit %s",
+                (limit,),
+            ).fetchall()
+        return [AiLog(*r) for r in rows]
 
     def propose_assignment(
         self, actor_id: int, on_status: Callable[[str], None]

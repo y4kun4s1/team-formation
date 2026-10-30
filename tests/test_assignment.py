@@ -98,3 +98,15 @@ def test_solver_finishes_quickly_even_when_infeasible_with_eight_students():
     start = time.monotonic()
     assert solve_assignment(teams, left) is None
     assert time.monotonic() - start < 5
+
+
+def test_generic_infeasible_reason_does_not_repeat_prefix():
+    from assignment import explain_infeasible, solve_assignment
+    from helpers import student
+
+    # 팀 하나에 같은 주 역할의 학생 둘만 남아 있다: 어느 진단에도 안 걸리지만 배정은 불가능하다.
+    teams = {1: []}
+    left = [student(1, "PL", "WP"), student(2, "PL", "WP")]
+    assert solve_assignment(teams, left) is None
+    reason = explain_infeasible(teams, left)
+    assert reason and not reason.startswith("규칙을 지키는 배정이 없음")

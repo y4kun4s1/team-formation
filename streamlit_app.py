@@ -179,6 +179,7 @@ def render_teams(svc: Service, me: Student, closed: bool) -> None:
     waiting = svc.application_of(me.id) if not me.is_admin else None
     if not me.is_admin:
         render_my_status(me, my_team, waiting, closed)
+        render_last_rejection(svc, me, my_team, waiting)
     st.subheader("팀 목록")
     for team_id, members in teams.items():
         # 팀 컨테이너에는 팀원의 이름만 넣는다(지원자의 이름을 넣으면 팀원으로 오해할 수 있다)
@@ -210,6 +211,17 @@ def render_teams(svc: Service, me: Student, closed: bool) -> None:
             st.write(f"내 지원: 팀{waiting.team_id}의 결과를 기다리는 중")
         if my_team is not None:
             render_votes(svc, me, my_team)
+
+
+def render_last_rejection(svc: Service, me: Student, my_team: int | None, waiting) -> None:
+    """팀이 없고 기다리는 지원도 없을 때, 마지막 지원이 거절됐으면 이유를 알려준다."""
+    if my_team is not None or waiting is not None:
+        return
+    last = svc.last_application(me.id)
+    if last is None or last.status != "거절":
+        return
+    with st.container(key="my_application"):
+        st.warning(f"팀{last.team_id}에 낸 지원이 거절됨: {last.reason or '이유가 기록되지 않음'}")
 
 
 def render_my_status(me: Student, my_team: int | None, waiting, closed: bool) -> None:
@@ -307,6 +319,7 @@ def render_admin(svc: Service, me: Student, closed: bool) -> None:
         )
         finish(result)
     render_proposal(left)
+    render_ai_logs(svc)
 
     if st.button("배정안 확정", key="admin_confirm"):
         proposal = st.session_state.get("proposal")
@@ -317,6 +330,22 @@ def render_admin(svc: Service, me: Student, closed: bool) -> None:
             for name in ("proposal", "assign_status_text"):
                 st.session_state.pop(name, None)
         finish(result)
+
+
+def render_ai_logs(svc: Service) -> None:
+    """최근 AI 호출 기록. 어느 모델이 얼마나 걸려 어떻게 끝났는지 본다."""
+    with st.container(key="ai_logs"):
+        st.markdown("**최근 AI 호출 기록**")
+        logs = svc.recent_ai_logs(10)
+        if not logs:
+            st.caption("아직 AI를 부른 기록이 없음")
+            return
+        lines = ["| 시각(한국) | 모델 | 결과 | 걸린 시간 | 이유 |", "|---|---|---|---|---|"]
+        for log in logs:
+            when = log.created_at.astimezone(KST).strftime("%m-%d %H:%M:%S")
+            reason = html.escape((log.error_summary or "").replace("|", "/").replace("\n", " "))
+            lines.append(f"| {when} | `{log.model}` | {log.status} | {log.elapsed_ms / 1000:.1f}초 | {reason} |")
+        st.markdown("\n".join(lines))
 
 
 def render_proposal(left: list[Student]) -> None:

@@ -257,3 +257,16 @@ def test_confirm_rejects_an_invalid_assignment(svc):
     assert svc.confirm(runner.admin_id, {}).kind == "막힘"
     assert svc.confirm(runner.admin_id, {"2026107": 1}).kind == "막힘"
     assert len(svc.unassigned()) == 2
+
+
+def test_recent_ai_logs_lists_attempts_newest_first(svc):
+    from scenarios import EASY, roster_bytes
+
+    admin = svc.login("admin", ADMIN_PASSWORD)
+    assert svc.upload_roster(admin.id, roster_bytes(EASY), EASY["teams"]).kind == "승인"
+    assert svc.close(admin.id).kind == "승인"
+    svc.propose_assignment(admin.id, lambda text: None)  # 가짜 AI가 모두 실패한다
+    logs = svc.recent_ai_logs(10)
+    assert [log.model for log in logs] == ["m3", "m2", "m1"]
+    assert all(log.status and log.elapsed_ms >= 0 for log in logs)
+    assert len(svc.recent_ai_logs(2)) == 2
