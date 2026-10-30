@@ -126,4 +126,4 @@ def explain_infeasible(
                 return f"팀{t}에 {role}를 맡을 학생이 없음"
         if covered_required(pool) < len(REQUIRED_ROLES):
             return f"팀{t}의 기획자와 웹 프로그래머를 서로 다른 학생이 맡을 수 없음"
-    return "규칙을 지키는 배정이 없음(팀 인원과 역할 조건을 한꺼번에 만족하는 조합이 없음)"
+    return "남은 학생을 어떻게 나눠 넣어도 팀 인원, 주 역할 중복, 필수 포함 역할 중 하나를 어기게 됨"

@@ -223,3 +223,21 @@ def test_admin_sees_ai_log_table(page, svc, tmp_path):
     assert text.count(":free") >= 3
     assert "tf_test_pw" not in text and ADMIN_PASSWORD not in text
     assert admin is not None
+
+
+def test_enter_key_logs_in(page, svc):
+    load(svc, EASY)
+    page.wait_for_selector(key("login_submit"), timeout=TIMEOUT)
+    page.fill(f"{key('login_student_no')} input", no(EASY, 1))
+    page.fill(f"{key('login_password')} input", "1234")
+    page.press(f"{key('login_password')} input", "Enter")
+    page.wait_for_selector(key("whoami"), timeout=TIMEOUT)
+
+
+def test_enter_key_with_wrong_password_is_blocked(page, svc):
+    load(svc, EASY)
+    page.wait_for_selector(key("login_submit"), timeout=TIMEOUT)
+    page.fill(f"{key('login_student_no')} input", no(EASY, 1))
+    page.fill(f"{key('login_password')} input", "틀림")
+    page.press(f"{key('login_password')} input", "Enter")
+    page.wait_for_function("document.querySelector('.st-key-result')?.innerText.includes('막힘')", timeout=TIMEOUT)

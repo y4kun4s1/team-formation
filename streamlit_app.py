@@ -159,9 +159,11 @@ def render_login(svc: Service) -> None:
     st.title("팀 편성")
     show_result()
     st.caption("학번과 비밀번호를 입력해 로그인하세요.")
-    st.text_input("학번", key="login_student_no")
-    st.text_input("비밀번호", type="password", key="login_password")
-    if st.button("로그인", key="login_submit"):
+    with st.form("login_form", border=False):  # 폼이어야 비밀번호 칸에서 Enter를 눌러도 로그인된다
+        st.text_input("학번", key="login_student_no")
+        st.text_input("비밀번호", type="password", key="login_password")
+        submitted = st.form_submit_button("로그인", key="login_submit")
+    if submitted:
         student = svc.login(st.session_state["login_student_no"], st.session_state["login_password"])
         if student is None:
             st.session_state["last_result"] = blocked("학번 또는 비밀번호가 틀림").text
