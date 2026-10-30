@@ -150,6 +150,11 @@ def test_deleted_student_returns_to_login(page, svc):
     page.wait_for_selector(key("login_submit"), timeout=12000)
 
 
+def test_login_screen_hides_student_password(page, svc):
+    page.wait_for_selector(key("login_submit"), timeout=TIMEOUT)
+    assert "1234" not in page.inner_text("body")
+
+
 def test_no_secret_on_screen(page, svc):
     load(svc, EASY)
     login(page, "admin", ADMIN_PASSWORD)

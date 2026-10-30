@@ -158,7 +158,7 @@ def show_result() -> None:
 def render_login(svc: Service) -> None:
     st.title("팀 편성")
     show_result()
-    st.caption("학번과 비밀번호를 입력해 로그인하세요. 학생 비밀번호는 모두 1234예요.")
+    st.caption("학번과 비밀번호를 입력해 로그인하세요.")
     st.text_input("학번", key="login_student_no")
     st.text_input("비밀번호", type="password", key="login_password")
     if st.button("로그인", key="login_submit"):
