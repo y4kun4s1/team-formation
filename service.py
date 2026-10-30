@@ -65,6 +65,28 @@ class AiLog:
     created_at: datetime
 
 
+@dataclass(frozen=True)
+class CommonView:
+    """모든 사람에게 똑같이 보이는 데이터. 개인 데이터는 넣지 않는다(여러 세션이 함께 캐시해서 쓰기 때문)."""
+
+    teams: dict[int, list[Student]]
+    closed: bool
+
+
+@dataclass(frozen=True)
+class Snapshot:
+    """한 사람의 화면 하나를 그리는 데 필요한 모든 데이터. me가 None이면 나머지는 비어 있다."""
+
+    me: Student | None
+    common: CommonView
+    waiting: Application | None
+    last: Application | None
+    pending: list[Application]
+    votes: dict[int, str]
+    unassigned: list[Student]  # 관리자만
+    ai_logs: list[AiLog]  # 관리자만
+
+
 class _Stop(Exception):
     """트랜잭션을 되돌리고 이 결과를 돌려주려고 쓰는 내부 예외."""
 
@@ -76,6 +98,22 @@ _APPLICATION_SELECT = (
     "select a.id, a.team_id, a.student_id, s.student_no, s.name, a.status, a.reason, a.created_at "
     "from tf_applications a join tf_students s on s.id = a.student_id "
 )
+
+# 화면이 다시 그려야 하는지 알려 주는 "지문". 화면에 보이는 데이터가 있는 표는 모두 여기에만 적는다.
+# 팀원(자리 포함), 지원 상태, 투표 수, 마감 여부, 학생 수와 최대 id(같은 인원으로 명단을 다시 올려도 바뀜),
+# 팀 수, AI 기록의 최대 id.
+_TOKEN_SQL = """
+select md5(concat_ws('|',
+  (select coalesce(string_agg(team_id::text || ':' || slot_no::text || ':' || student_id::text, ',' order by team_id, slot_no), '')
+     from tf_members),
+  (select coalesce(string_agg(id::text || ':' || status, ',' order by id), '') from tf_applications),
+  (select count(*)::text from tf_votes),
+  (select coalesce(max(value), '') from tf_settings where key = 'closed'),
+  (select count(*)::text || ':' || coalesce(max(id), 0)::text from tf_students),
+  (select count(*)::text from tf_teams),
+  (select coalesce(max(id), 0)::text from tf_ai_logs)
+))
+"""
 
 
 class Service:
@@ -151,6 +189,65 @@ class Service:
         return Application(*row)
 
     # ---- 읽기 ----
+
+    def change_token(self) -> str:
+        """DB의 화면용 데이터가 바뀌면 달라지는 문자열. 질의 1개만 쓴다."""
+        with self.pool.connection() as conn:
+            return conn.execute(_TOKEN_SQL).fetchone()[0]
+
+    @staticmethod
+    def _common(conn) -> CommonView:
+        """팀과 팀원을 조인 질의 하나로 읽는다(_all_teams와 같은 결과, 왕복은 더 적음)."""
+        rows = conn.execute(
+            "select t.id, s.id, s.student_no, s.name, s.main_role, s.is_admin, "
+            "coalesce((select array_agg(r.role order by r.role) from tf_student_sub_roles r "
+            "where r.student_id = s.id), '{}') "
+            "from tf_teams t left join tf_members m on m.team_id = t.id "
+            "left join tf_students s on s.id = m.student_id order by t.id, m.slot_no"
+        ).fetchall()
+        teams: dict[int, list[Student]] = {}
+        for team_id, sid, student_no, name, main_role, is_admin, subs in rows:
+            members = teams.setdefault(team_id, [])
+            if sid is not None:
+                members.append(Student(sid, student_no, name, main_role, tuple(subs), is_admin))
+        return CommonView(teams, Service._closed(conn))
+
+    def common_view(self) -> CommonView:
+        with self.pool.connection() as conn:
+            return self._common(conn)
+
+    def snapshot(self, student_id: int, common: CommonView | None = None) -> Snapshot:
+        """이 사람 화면 하나에 필요한 데이터를 연결 하나로 읽는다. common을 주면 팀 목록은 다시 읽지 않는다."""
+        with self.pool.connection() as conn:
+            me = self._students(conn, [student_id]).get(student_id)
+            if common is None:
+                common = self._common(conn)
+            if me is None:
+                return Snapshot(None, common, None, None, [], {}, [], [])
+            if me.is_admin:
+                logs = conn.execute(
+                    "select model, status, coalesce(elapsed_ms, 0), error_summary, created_at "
+                    "from tf_ai_logs order by id desc limit 10"
+                ).fetchall()
+                return Snapshot(me, common, None, None, [], {}, self._unassigned(conn), [AiLog(*r) for r in logs])
+            # 대기 중인 지원은 학생당 하나뿐이고 그동안 새 지원을 낼 수 없으므로, 있다면 항상 마지막 지원이다
+            last = conn.execute(
+                _APPLICATION_SELECT + "where a.student_id = %s order by a.id desc limit 1", (student_id,)
+            ).fetchone()
+            waiting = last if last is not None and last[5] == "대기" else None
+            my_team = next((t for t, members in common.teams.items() if any(m.id == student_id for m in members)), None)
+            pending = []
+            if my_team is not None:
+                pending = [self._application(r) for r in conn.execute(
+                    _APPLICATION_SELECT + "where a.team_id = %s and a.status = '대기' order by a.id", (my_team,)
+                ).fetchall()]
+            votes = {r[0]: r[1] for r in conn.execute(
+                "select application_id, vote from tf_votes where voter_id = %s", (student_id,)
+            ).fetchall()}
+            return Snapshot(
+                me, common, self._application(waiting) if waiting else None,
+                self._application(last) if last else None, pending, votes, [], [],
+            )
 
     def get_student(self, student_id: int) -> Student | None:
         with self.pool.connection() as conn:
